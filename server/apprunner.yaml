@@ -14,8 +14,8 @@ run:
     - name: NODE_ENV
       value: production
     - name: MONGODB_URI
-      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-XXXXXXX#MONGODB_URI"
+      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-COwPRE#MONGODB_URI"
     - name: JWT_SECRET
-      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-XXXXXXX#JWT_SECRET"
+      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-COwPRE#JWT_SECRET"
     - name: ALLOWED_ORIGINS
-      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-XXXXXXX#ALLOWED_ORIGINS"
+      value-from: "arn:aws:secretsmanager:us-east-1:979559056307:secret:partner_pulse_app_secrets-COwPRE#ALLOWED_ORIGINS"
