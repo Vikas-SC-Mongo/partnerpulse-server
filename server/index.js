@@ -32,7 +32,7 @@ app.use(express.json());
 // ── DB Connect ────────────────────────────────────────────────
 mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
-    console.log("✅ MongoDB connected:", process.env.MONGODB_URI);
+    console.log("✅ MongoDB connected");
     // Seed default admin user if no users exist
     const count = await User.countDocuments();
     if (count === 0) {
@@ -58,9 +58,11 @@ mongoose.connect(process.env.MONGODB_URI)
     for (const d of DEFAULTS) {
       await Config.findOneAndUpdate({ key: d.key }, { $setOnInsert: d }, { upsert: true });
     }
-    app.listen(PORT, () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
   })
   .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });
+
+// Start immediately so App Runner TCP health check passes while MongoDB connects
+app.listen(PORT, () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const TEAM_TARGET    = 65776000;   // $65.776M annual team target
@@ -513,7 +515,8 @@ app.post("/api/workstreams/upload", upload.single("file"), async (req, res) => {
 // HEALTH CHECK
 // ════════════════════════════════════════════════════════════════
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", mongodb: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
+  const connected = mongoose.connection.readyState === 1;
+  res.status(connected ? 200 : 503).json({ status: connected ? "ok" : "starting", mongodb: connected ? "connected" : "disconnected" });
 });
 
 // ════════════════════════════════════════════════════════════════
