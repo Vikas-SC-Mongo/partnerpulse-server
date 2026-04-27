@@ -58,10 +58,11 @@ mongoose.connect(process.env.MONGODB_URI)
     for (const d of DEFAULTS) {
       await Config.findOneAndUpdate({ key: d.key }, { $setOnInsert: d }, { upsert: true });
     }
+    app.listen(PORT, () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
   })
   .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });
 
-// ── Constants ─────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────
 const TEAM_TARGET    = 65776000;   // $65.776M annual team target
 const FY27_START     = new Date("2026-02-01");
 const FY27_END       = new Date("2027-01-31T23:59:59");
@@ -960,5 +961,3 @@ app.delete("/api/events/:id", async (req, res) => {
     res.json({ success: true });
   } catch(err) { res.status(500).json({ error: err.message }); }
 });
-
-app.listen(PORT, () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
