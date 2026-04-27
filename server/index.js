@@ -62,7 +62,7 @@ mongoose.connect(process.env.MONGODB_URI)
   .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });
 
 // Start immediately so App Runner TCP health check passes while MongoDB connects
-app.listen(PORT, () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
+app.listen(PORT, "0.0.0.0",  () => console.log(`🚀 PartnerPulse API running on http://localhost:${PORT}`));
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const TEAM_TARGET    = 65776000;   // $65.776M annual team target
