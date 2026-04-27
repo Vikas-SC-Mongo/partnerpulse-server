@@ -5,7 +5,7 @@ build:
     build:
       - npm ci --omit=dev
 run:
-  runtime-version: 22
+  runtime-version: nodejs22
   command: node index.js
   network:
     port: 3001
