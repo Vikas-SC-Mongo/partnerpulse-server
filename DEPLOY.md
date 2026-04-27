@@ -1,123 +1,169 @@
 # PartnerPulse — Production Deployment Guide
 
-Monorepo deployed as two services from the same GitHub repository.
+## Architecture
 
-## Overview
-- Frontend → AWS Amplify (auto-deploys `client/` from GitHub)
-- Backend  → AWS App Runner (auto-deploys `server/` from GitHub)
-- Database → MongoDB Atlas
+| Layer    | Service              | Notes                          |
+|----------|----------------------|--------------------------------|
+| Backend  | AWS App Runner       | Docker image pulled from ECR   |
+| Image registry | Amazon ECR    | Auto-deployed via GitHub Actions |
+| Frontend | AWS Amplify          | Builds from `client/` on push  |
+| Database | MongoDB Atlas        | M0 free or M10 for production  |
 
-Local dev (`npm run dev`) is unchanged.
+CI/CD pipeline: **push to `main`** → GitHub Actions → builds Docker image → pushes to ECR → triggers App Runner deployment.
 
 ---
 
 ## Step 1 — MongoDB Atlas
 
 1. Go to https://cloud.mongodb.com → create a project.
-2. Build a Cluster → M0 Free (or M10 for production). Pick a region close to where App Runner will run.
-3. Database Access → Add user `partnerpulse` with a strong password. Role: Atlas Admin.
-4. Network Access → Add IP `0.0.0.0/0` (App Runner uses dynamic IPs; lock down later via VPC connector if needed).
-5. Connect → Drivers → copy the URI:
-   `mongodb+srv://partnerpulse:PASSWORD@cluster0.xxxxx.mongodb.net/partnerpulse`
+2. **Build a Cluster** → M0 Free (or M10 for production). Pick the same AWS region as App Runner.
+3. **Database Access** → Add user `partnerpulse` with a strong password. Role: **Atlas Admin**.
+4. **Network Access** → Add IP `0.0.0.0/0` (App Runner uses dynamic IPs; tighten later with a VPC connector if needed).
+5. **Connect** → Drivers → copy the URI:
+   ```
+   mongodb+srv://partnerpulse:<PASSWORD>@cluster0.xxxxx.mongodb.net/partnerpulse
+   ```
 
 ---
 
-## Step 2 — Push code to GitHub
+## Step 2 — Create an Amazon ECR Repository
+
+1. AWS Console → **Elastic Container Registry** → **Create repository**.
+2. Repository name: `partnerpulse-server` (private).
+3. Keep all other settings as defaults → **Create repository**.
+4. Copy the **repository URI** — you'll need it later.  
+   Format: `<account-id>.dkr.ecr.<region>.amazonaws.com/partnerpulse-server`
+
+---
+
+## Step 3 — IAM User for GitHub Actions
+
+Create a dedicated IAM user so GitHub Actions can push images and trigger deployments.
+
+1. AWS Console → **IAM** → **Users** → **Create user**.
+2. Name: `partnerpulse-deployer` → **Next**.
+3. **Attach policies directly** → add these two managed policies:
+   - `AmazonEC2ContainerRegistryPowerUser`
+   - `AWSAppRunnerFullAccess`
+4. **Create user** → open the user → **Security credentials** → **Create access key** → choose *Other*.
+5. Save the **Access key ID** and **Secret access key** — you only see the secret once.
+
+---
+
+## Step 4 — Add GitHub Actions Secrets
+
+In your GitHub repository → **Settings** → **Secrets and variables** → **Actions** → **New repository secret** — add all five:
+
+| Secret name               | Value                                             |
+|---------------------------|---------------------------------------------------|
+| `AWS_ACCESS_KEY_ID`       | IAM access key from Step 3                        |
+| `AWS_SECRET_ACCESS_KEY`   | IAM secret key from Step 3                        |
+| `AWS_REGION`              | e.g. `us-east-1`                                  |
+| `ECR_REPOSITORY`          | ECR repo name, e.g. `partnerpulse-server`         |
+| `APP_RUNNER_SERVICE_ARN`  | App Runner service ARN — fill in after Step 5     |
+
+---
+
+## Step 5 — Push the First Image Manually
+
+Before creating the App Runner service you need at least one image in ECR.
 
 ```bash
-cd ~/Desktop/partnerpulse-app
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/partnerpulse-app.git
-git push -u origin main
+# Authenticate Docker with ECR (replace region + account ID)
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin \
+    <account-id>.dkr.ecr.us-east-1.amazonaws.com
+
+# Build and push
+docker build -t partnerpulse-server .
+docker tag  partnerpulse-server:latest \
+            <account-id>.dkr.ecr.us-east-1.amazonaws.com/partnerpulse-server:latest
+docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/partnerpulse-server:latest
 ```
 
 ---
 
-## Step 3 — Deploy Backend to AWS App Runner
+## Step 6 — Create the App Runner Service
 
-1. AWS Console → **App Runner** → Create service.
-2. Source: **Source code repository** → connect your GitHub account → pick `partnerpulse-app` and branch `main`.
-3. Deployment trigger: **Automatic** (redeploy on every push to `main`).
-4. Configure build:
-   - Configuration file: **Use a configuration file** (App Runner reads `server/apprunner.yaml`).
-   - Source directory: `server`
-5. Service settings:
+1. AWS Console → **App Runner** → **Create service**.
+2. **Source**: Container registry → Amazon ECR.
+3. **Container image URI**: browse and select `partnerpulse-server:latest`.
+4. **Deployment trigger**: **Automatic** (App Runner watches ECR; GitHub Actions also calls `start-deployment` as a fallback).
+5. **ECR access role**: click *Create new service role* — App Runner needs this to pull images.
+6. **Configure service**:
    - Service name: `partnerpulse-server`
-   - Virtual CPU/memory: 0.25 vCPU / 0.5 GB is enough to start.
-   - Port: `3001` (already set in apprunner.yaml).
-6. Environment variables (Add all of these):
+   - Port: `8080`
+   - vCPU / Memory: `0.25 vCPU / 0.5 GB` (scale up if needed)
+7. **Environment variables** — add all three:
    ```
-   MONGODB_URI    = mongodb+srv://partnerpulse:PASSWORD@cluster0.xxxxx.mongodb.net/partnerpulse
+   MONGODB_URI    = mongodb+srv://partnerpulse:<PASSWORD>@cluster0.xxxxx.mongodb.net/partnerpulse
    JWT_SECRET     = <run: openssl rand -hex 32>
-   ALLOWED_ORIGINS= https://placeholder.amplifyapp.com   # update after Step 4
+   ALLOWED_ORIGINS= https://placeholder.amplifyapp.com   # update after Step 8
    ```
-   (PORT is already exported by apprunner.yaml; no need to set it.)
-7. Health check (optional, recommended):
-   - Protocol: HTTP, Path: `/api/health`, Port: 3001.
-8. Create & deploy. After ~5 min you'll get a URL like:
-   `https://abcd1234.us-east-1.awsapprunner.com`
-9. Test: open `https://<your-url>/api/health` → should return `{"status":"ok","mongodb":"connected"}`.
-
-**Save this URL — you need it in Step 4.**
+8. **Health check**:
+   - Protocol: HTTP
+   - Path: `/api/health`
+   - Port: `8080`
+9. **Create & deploy** — wait ~3 min. You'll get a URL like:
+   ```
+   https://abcd1234.us-east-1.awsapprunner.com
+   ```
+10. Copy the **Service ARN** from the service overview page and add it as the `APP_RUNNER_SERVICE_ARN` GitHub secret (Step 4).
 
 ---
 
-## Step 4 — Deploy Frontend to AWS Amplify
+## Step 7 — Test the Backend
 
-1. AWS Console → **Amplify** → New app → Host web app → GitHub.
-2. Pick `partnerpulse-app` → branch `main`.
-3. Amplify auto-detects `amplify.yml` at the repo root (already configured to build `client/`).
-4. Environment variables → Add:
+```bash
+curl https://<your-app-runner-url>/api/health
+# Expected: {"status":"ready"}
+```
+
+---
+
+## Step 8 — Deploy Frontend to AWS Amplify
+
+1. AWS Console → **Amplify** → **New app** → **Host web app** → GitHub.
+2. Pick `partnerpulse-server` repo → branch `main`.
+3. Amplify auto-detects `amplify.yml` (already configured to build `client/`).
+4. **Environment variables** → add:
    ```
    VITE_API_URL = https://<your-app-runner-url>.awsapprunner.com
    ```
-5. Save and deploy. After ~3 min you'll get a URL like:
-   `https://main.xxxxxx.amplifyapp.com`
-6. **Go back to App Runner** → Configuration → Edit environment variables:
+5. Save and deploy. After ~3 min you'll get:
+   ```
+   https://main.xxxxxx.amplifyapp.com
+   ```
+6. **Go back to App Runner** → **Configuration** → edit `ALLOWED_ORIGINS`:
    ```
    ALLOWED_ORIGINS = https://main.xxxxxx.amplifyapp.com
    ```
-   App Runner will roll out the new config automatically.
+   App Runner rolls out the new config automatically.
 
 ---
 
-## Step 5 — Test Production
+## Step 9 — Verify End-to-End
 
 1. Open the Amplify URL.
 2. Login with `admin` / `admin123`.
-3. **Immediately** change the admin password in Admin → Users.
+3. **Immediately change the admin password** in Admin → Users.
 4. Import data via the Upload tab.
 
 ---
 
-## CI/CD
+## CI/CD — How It Works After Setup
 
-Both Amplify and App Runner are wired to your GitHub repo with automatic deploys.
+Every push to `main`:
+1. GitHub Actions builds the Docker image.
+2. Pushes `:<sha>` and `:latest` tags to ECR.
+3. Calls `aws apprunner start-deployment` to roll out the new image.
+4. App Runner drains old containers and starts new ones (zero-downtime rolling update, ~2 min).
 
 ```bash
 git add .
-git commit -m "Description of change"
-git push
+git commit -m "your change"
+git push                    # triggers automatic deploy
 ```
-
-- Amplify rebuilds the frontend (~3 min).
-- App Runner rebuilds the backend (~5 min).
-
-No GitHub Actions or extra config needed.
-
----
-
-## Local Dev (unchanged)
-
-```bash
-cd ~/Desktop/partnerpulse-app
-npm run dev
-```
-
-Local uses MongoDB on `localhost`, backend on `:3001`, frontend on `:5173`.
 
 ---
 
@@ -131,25 +177,32 @@ openssl rand -hex 32
 
 ## Custom Domain (optional)
 
-- Amplify: Domain management → Add domain.
-- App Runner: Custom domains → Link domain (gives you ACM cert + CNAME instructions).
+- **Amplify**: Domain management → Add domain.
+- **App Runner**: Custom domains → Link domain (auto-provisions ACM cert + CNAME).
 
 ---
 
 ## Estimated Monthly Cost
 
-- MongoDB Atlas M0: **Free** (512 MB).
-- AWS App Runner (0.25 vCPU / 0.5 GB, always-on): **~$5–8/month**.
-- AWS Amplify Hosting: **Free tier** (1000 build min/mo, 5 GB storage, 15 GB transfer).
-- **Total: ~$5–8/month.**
+| Service            | Config                     | Cost           |
+|--------------------|----------------------------|----------------|
+| MongoDB Atlas      | M0 Free                    | **Free**       |
+| AWS App Runner     | 0.25 vCPU / 0.5 GB, active | ~$5–8/month    |
+| Amazon ECR         | <1 GB storage              | ~$0.10/month   |
+| AWS Amplify        | Free tier                  | **Free**       |
+| **Total**          |                            | **~$5–8/month**|
 
-To save more, set App Runner to **pause when idle** (auto-sleep) — drops to ~$1/month plus per-request charges, with cold-start latency on first request.
+> To cut costs further: set App Runner to **pause when idle** (auto-sleep) → drops to ~$1/month + per-request charges, with a cold-start latency on the first request after idle.
 
 ---
 
 ## Troubleshooting
 
-- **CORS error in browser console**: `ALLOWED_ORIGINS` on App Runner doesn't match the Amplify URL exactly (check `https://`, no trailing slash).
-- **Frontend calls hit Amplify domain instead of API**: `VITE_API_URL` not set in Amplify, or set after the build (env vars are baked in at build time — trigger a redeploy from Amplify console after changing).
-- **MongoDB connection fails**: Atlas Network Access doesn't whitelist `0.0.0.0/0`, or wrong password in URI.
-- **App Runner build fails**: Check the build log for the exact npm/node error. Most issues are missing env vars or Node version mismatch (apprunner.yaml pins Node 18).
+| Symptom | Fix |
+|---------|-----|
+| CORS error in browser | `ALLOWED_ORIGINS` on App Runner doesn't match the Amplify URL exactly — check `https://` prefix, no trailing slash |
+| Frontend calls fail | `VITE_API_URL` not set in Amplify, or set after the build (env vars are baked in at build time — trigger a redeploy from Amplify console) |
+| MongoDB connection fails | Atlas Network Access doesn't have `0.0.0.0/0`, or wrong password in URI |
+| App Runner can't pull image | ECR access role missing, or wrong region in `AWS_REGION` secret |
+| GitHub Actions: `start-deployment` fails | `APP_RUNNER_SERVICE_ARN` secret is empty or incorrect — copy the ARN from the App Runner service overview page |
+| Build fails in Actions | Check the Actions log; usually a missing secret or Docker build error |
