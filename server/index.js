@@ -1,4 +1,10 @@
 require("dotenv").config();
+
+if (!process.env.MONGODB_URI) {
+  console.error("❌ MONGODB_URI environment variable is not set. Set it in AWS App Runner → Configuration → Environment variables.");
+  process.exit(1);
+}
+
 const express   = require("express");
 const mongoose  = require("mongoose");
 const cors      = require("cors");
