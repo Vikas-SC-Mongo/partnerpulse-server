@@ -39,6 +39,11 @@ app.use(
 app.use(express.json());
 
 // ── DB Connect ────────────────────────────────────────────────
+if (!process.env.MONGODB_URI) {
+  console.error("❌ MONGODB_URI environment variable is not set");
+  process.exit(1);
+}
+
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(async () => {
