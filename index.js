@@ -39,6 +39,11 @@ app.use(
 app.use(express.json());
 
 // ── DB Connect ────────────────────────────────────────────────
+if (!process.env.MONGODB_URI) {
+  console.error("❌ MONGODB_URI environment variable is not set");
+  process.exit(1);
+}
+
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(async () => {
@@ -181,9 +186,9 @@ app.get("/", (req, res) => {
 
 app.get("/api/health", (req, res) => {
   const connected = mongoose.connection.readyState === 1;
-
-  res.status(connected ? 200 : 503).json({
-    status: connected ? "ready" : "not ready",
+  res.status(200).json({
+    status: connected ? "ready" : "starting",
+    mongodb: connected ? "connected" : "connecting",
   });
 });
 
